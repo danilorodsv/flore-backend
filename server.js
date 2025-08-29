@@ -7,13 +7,17 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs/promises';
 import { v4 as uuidv4 } from 'uuid';
+import bcrypt from 'bcryptjs'; // <-- IMPORTAÇÃO ADICIONADA
+import jwt from 'jsonwebtoken'; // <-- IMPORTAÇÃO ADICIONADA
+import 'dotenv/config'; // <-- IMPORTAÇÃO ADICIONADA (para variáveis de ambiente como JWT_SECRET)
+
 
 // --- CONFIGURAÇÃO DO BANCO DE DADOS ---
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const dataDir = join(__dirname, 'data'); // Define o diretório 'data'
-const file = join(dataDir, 'db.json'); // Define o caminho do arquivo dentro de 'data'
+const dataDir = join(__dirname, 'data');
+const file = join(dataDir, 'db.json');
 
-// Estrutura de dados padrão para o banco de dados
+// Estrutura de dados padrão
 const defaultData = {
     products: [
         { id: '1', name: 'Buquê de Rosas Vermelhas', description: 'Elegante buquê com 12 rosas vermelhas frescas, perfeito para demonstrar amor e carinho.', price: 89.9, category: 'buques', imageUrl: 'https://images.unsplash.com/photo-1518895949257-7621c3c786d7?w=400&h=300&fit=crop', featured: true, views: 156, tags: ['romântico', 'clássico', 'vermelho'], active: true },
@@ -35,7 +39,8 @@ const defaultData = {
         hours: 'Seg - Sex: 08:00 às 18:00\nSáb: 08:00 às 12:00'
     },
     admin: {
-        passwordHash: '$2a$10$somethinghashed'
+        // Lembre-se de gerar um hash seguro para sua senha real
+        passwordHash: '$2a$10$mR.E.3q3F6C.pSg3i5i/IuJt.V.uT8G2p.Z.Y.Z.Y.Z.Y.Z.Y'
     }
 };
 
@@ -44,23 +49,20 @@ async function startServer() {
     const app = express();
     app.use(cors());
     app.use(express.json());
-    app.use(express.static('public')); // Para servir arquivos como admin.html, index.html, etc.
+    app.use(express.static('public'));
 
-    // **A CORREÇÃO CRÍTICA ESTÁ AQUI**
-    // Garante que o diretório 'data' exista antes de tentar ler/escrever nele.
     try {
         await fs.mkdir(dataDir, { recursive: true });
         console.log(`Diretório de dados verificado/criado em: ${dataDir}`);
     } catch (error) {
         console.error('ERRO FATAL: Não foi possível criar o diretório de dados.', error);
-        process.exit(1); // Encerra o servidor se não conseguir criar a pasta.
+        process.exit(1);
     }
 
     const adapter = new JSONFile(file);
     const db = new Low(adapter, defaultData);
 
     await db.read();
-    // Garante que o db tenha os dados padrão se o arquivo for criado vazio
     db.data ||= defaultData;
     await db.write();
 
@@ -69,9 +71,12 @@ async function startServer() {
     // ROTA PÚBLICA: Login do Admin
     app.post('/api/admin/login', async (req, res) => {
         const { password } = req.body;
-        const passwordMatch = await bcrypt.compare(password, db.data.admin.passwordHash);
+        // Use uma senha padrão se o hash não estiver definido
+        const storedHash = db.data.admin?.passwordHash || defaultData.admin.passwordHash;
+        const passwordMatch = await bcrypt.compare(password, storedHash);
+        
         if (passwordMatch) {
-            const token = jwt.sign({ username: 'admin' }, process.env.JWT_SECRET, { expiresIn: '8h' });
+            const token = jwt.sign({ username: 'admin' }, process.env.JWT_SECRET || 'seu-segredo-jwt-padrao', { expiresIn: '8h' });
             res.json({ token });
         } else {
             res.status(401).json({ error: 'Senha incorreta' });
@@ -83,17 +88,25 @@ async function startServer() {
     app.get('/api/categories', (req, res) => res.json(db.data.categories));
     app.get('/api/settings', (req, res) => res.json(db.data.settings));
 
-    // ROTA PÚBLICA: Analytics (O TRECHO FALTANTE)
+    // ROTA PARA SALVAR CONFIGURAÇÕES (O TRECHO FALTANTE)
+    app.post('/api/settings', async (req, res) => {
+        try {
+            // Idealmente, esta rota deveria ser protegida por autenticação
+            db.data.settings = { ...db.data.settings, ...req.body };
+            await db.write();
+            console.log('Configurações salvas:', db.data.settings);
+            res.status(200).json({ message: 'Configurações salvas com sucesso!', settings: db.data.settings });
+        } catch (error) {
+            console.error('Erro ao salvar configurações:', error);
+            res.status(500).json({ error: 'Erro interno do servidor ao salvar.' });
+        }
+    });
+
+    // ROTA PÚBLICA: Analytics
     app.post('/api/analytics', async (req, res) => {
         try {
-            const event = {
-                ...req.body,
-                timestamp: new Date().toISOString(),
-                id: uuidv4()
-            };
-            if (!db.data.analytics) {
-                db.data.analytics = [];
-            }
+            const event = { ...req.body, timestamp: new Date().toISOString(), id: uuidv4() };
+            db.data.analytics = db.data.analytics || [];
             db.data.analytics.push(event);
             await db.write();
             res.status(201).send({ status: 'ok' });
@@ -102,7 +115,6 @@ async function startServer() {
             res.status(500).send({ error: 'Internal Server Error' });
         }
     });
-
 
     // --- INICIAR O SERVIDOR ---
     const PORT = process.env.PORT || 5000;
