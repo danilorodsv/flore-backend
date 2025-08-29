@@ -7,9 +7,9 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs/promises';
 import { v4 as uuidv4 } from 'uuid';
-import bcrypt from 'bcryptjs'; // <-- IMPORTAÇÃO ADICIONADA
-import jwt from 'jsonwebtoken'; // <-- IMPORTAÇÃO ADICIONADA
-import 'dotenv/config'; // <-- IMPORTAÇÃO ADICIONADA (para variáveis de ambiente como JWT_SECRET)
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import 'dotenv/config';
 
 
 // --- CONFIGURAÇÃO DO BANCO DE DADOS ---
@@ -39,7 +39,6 @@ const defaultData = {
         hours: 'Seg - Sex: 08:00 às 18:00\nSáb: 08:00 às 12:00'
     },
     admin: {
-        // Lembre-se de gerar um hash seguro para sua senha real
         passwordHash: '$2a$10$mR.E.3q3F6C.pSg3i5i/IuJt.V.uT8G2p.Z.Y.Z.Y.Z.Y.Z.Y'
     }
 };
@@ -53,7 +52,6 @@ async function startServer() {
 
     try {
         await fs.mkdir(dataDir, { recursive: true });
-        console.log(`Diretório de dados verificado/criado em: ${dataDir}`);
     } catch (error) {
         console.error('ERRO FATAL: Não foi possível criar o diretório de dados.', error);
         process.exit(1);
@@ -62,16 +60,28 @@ async function startServer() {
     const adapter = new JSONFile(file);
     const db = new Low(adapter, defaultData);
 
+    // --- CORREÇÃO DO LOOPING ---
+    // Lê o banco de dados. Se o arquivo não existir ou estiver vazio,
+    // db.data permanecerá null ou undefined após esta chamada.
     await db.read();
-    db.data ||= defaultData;
-    await db.write();
+
+    // Verifica se os dados foram carregados. Se não, significa que o arquivo
+    // é novo ou estava vazio, então o preenchemos com os dados padrão e salvamos.
+    if (!db.data) {
+        console.log('Banco de dados não encontrado ou vazio. Inicializando com dados padrão...');
+        db.data = defaultData;
+        await db.write(); // Escreve no disco APENAS se for a primeira vez.
+        console.log('Banco de dados inicializado com sucesso.');
+    } else {
+        console.log('Banco de dados carregado com sucesso.');
+    }
+    // --- FIM DA CORREÇÃO ---
 
     // --- ROTAS DA API ---
 
     // ROTA PÚBLICA: Login do Admin
     app.post('/api/admin/login', async (req, res) => {
         const { password } = req.body;
-        // Use uma senha padrão se o hash não estiver definido
         const storedHash = db.data.admin?.passwordHash || defaultData.admin.passwordHash;
         const passwordMatch = await bcrypt.compare(password, storedHash);
         
@@ -88,10 +98,9 @@ async function startServer() {
     app.get('/api/categories', (req, res) => res.json(db.data.categories));
     app.get('/api/settings', (req, res) => res.json(db.data.settings));
 
-    // ROTA PARA SALVAR CONFIGURAÇÕES (O TRECHO FALTANTE)
+    // ROTA PARA SALVAR CONFIGURAÇÕES
     app.post('/api/settings', async (req, res) => {
         try {
-            // Idealmente, esta rota deveria ser protegida por autenticação
             db.data.settings = { ...db.data.settings, ...req.body };
             await db.write();
             console.log('Configurações salvas:', db.data.settings);
